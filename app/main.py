@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 DATABASE_PATH = Path(os.getenv("MANOVICHAR_DATABASE_PATH", "manovichar.db"))
 
-# Live domain aur local dono ko CORS mein allow karne ke liye
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,"
     "http://127.0.0.1:5173,https://manovichar.com,https://www.manovichar.com"
@@ -72,21 +71,10 @@ def initialize_database() -> None:
         )
 
 
-def require_admin(admin_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN")) -> None:
-    # Ab yeh Render par set kiye gaye environment variable se token uthayega!
-    expected_token = os.getenv("MANOVICHAR_ADMIN_TOKEN", "Manovichar2026")
-    if admin_token is None or not secrets.compare_digest(admin_token, expected_token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing admin token",
-        )
-
-
 def require_admin(
     admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
-    alt_token: Optional[str] = Header(default=None, alias="manovichar-admin-token"),
+    alt_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN"),
 ) -> None:
-    # Dono mein se koi bhi header mil jaye (X-Admin-Token ya manovichar-admin-token)
     token = admin_token or alt_token
     expected_token = os.getenv("MANOVICHAR_ADMIN_TOKEN", "Manovichar2026")
     
@@ -95,6 +83,26 @@ def require_admin(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing admin token",
         )
+
+
+def require_admin_for_local_testing(
+    request: Request,
+    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+    alt_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN"),
+) -> None:
+    client_host = request.client.host if request.client else ""
+    try:
+        is_loopback = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        is_loopback = False
+
+    if (
+        os.getenv("MANOVICHAR_ENV", "production").strip().lower() == "development"
+        and os.getenv("MANOVICHAR_ALLOW_LOCAL_ADMIN_WITHOUT_TOKEN", "").lower() == "true"
+        and is_loopback
+    ):
+        return
+    require_admin(admin_token, alt_token)
 
 
 @asynccontextmanager
@@ -110,7 +118,7 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["*"],  # Saare headers allow karne ke liye taaki token block na ho
+    allow_headers=["*"],
 )
 
 
