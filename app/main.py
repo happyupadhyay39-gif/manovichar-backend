@@ -71,25 +71,31 @@ def initialize_database() -> None:
         )
 
 
-def require_admin(
-    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
-    alt_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN"),
-) -> None:
-    token = admin_token or alt_token
+def require_admin(request: Request) -> None:
+    # Check all possible header variations (handling Render's underscore stripping)
+    headers = request.headers
+    token = (
+        headers.get("x-admin-token") or
+        headers.get("manovichar-admin-token") or
+        headers.get("manovichar_admin_token") or
+        headers.get("authorization") or
+        headers.get("token")
+    )
+    
     expected_token = os.getenv("MANOVICHAR_ADMIN_TOKEN", "Manovichar2026")
     
-    if token is None or not secrets.compare_digest(token, expected_token):
+    # Clean up token (remove 'Bearer ' prefix if any, and strip spaces)
+    clean_token = token.replace("Bearer ", "").strip() if token else ""
+    clean_expected = expected_token.strip()
+
+    if not token or not secrets.compare_digest(clean_token, clean_expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing admin token",
         )
 
 
-def require_admin_for_local_testing(
-    request: Request,
-    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
-    alt_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN"),
-) -> None:
+def require_admin_for_local_testing(request: Request) -> None:
     client_host = request.client.host if request.client else ""
     try:
         is_loopback = ipaddress.ip_address(client_host).is_loopback
@@ -102,8 +108,7 @@ def require_admin_for_local_testing(
         and is_loopback
     ):
         return
-    require_admin(admin_token, alt_token)
-
+    require_admin(request)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -142,13 +147,13 @@ def get_blog(blog_id: str) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blog not found")
     return dict(row)
 
-
 @app.post(
     "/api/admin/blogs",
     response_model=BlogResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_admin_for_local_testing)],
 )
+
 def create_blog(blog: BlogCreate) -> dict:
     created_at = datetime.now(timezone.utc).isoformat()
     blog_id = str(uuid4())
