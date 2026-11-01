@@ -14,9 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 DATABASE_PATH = Path(os.getenv("MANOVICHAR_DATABASE_PATH", "manovichar.db"))
+
+# Live domain aur local dono ko CORS mein allow karne ke liye
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,"
-    "http://127.0.0.1:5173"
+    "http://127.0.0.1:5173,https://manovichar.com,https://www.manovichar.com"
 )
 CORS_ORIGINS = [
     origin.strip()
@@ -71,7 +73,8 @@ def initialize_database() -> None:
 
 
 def require_admin(admin_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN")) -> None:
-    expected_token = "manovichar123"  # Yahan jo marzi apna secret password rakh lein
+    # Ab yeh Render par set kiye gaye environment variable se token uthayega!
+    expected_token = os.getenv("MANOVICHAR_ADMIN_TOKEN", "Manovichar2026")
     if admin_token is None or not secrets.compare_digest(admin_token, expected_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,7 +114,7 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "MANOVICHAR_ADMIN_TOKEN"],
+    allow_headers=["*"],  # Saare headers allow karne ke liye taaki token block na ho
 )
 
 
