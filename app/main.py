@@ -82,23 +82,19 @@ def require_admin(admin_token: Optional[str] = Header(default=None, alias="MANOV
         )
 
 
-def require_admin_for_local_testing(
-    request: Request,
-    admin_token: Optional[str] = Header(default=None, alias="MANOVICHAR_ADMIN_TOKEN"),
+def require_admin(
+    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+    alt_token: Optional[str] = Header(default=None, alias="manovichar-admin-token"),
 ) -> None:
-    client_host = request.client.host if request.client else ""
-    try:
-        is_loopback = ipaddress.ip_address(client_host).is_loopback
-    except ValueError:
-        is_loopback = False
-
-    if (
-        os.getenv("MANOVICHAR_ENV", "production").strip().lower() == "development"
-        and os.getenv("MANOVICHAR_ALLOW_LOCAL_ADMIN_WITHOUT_TOKEN", "").lower() == "true"
-        and is_loopback
-    ):
-        return
-    require_admin(admin_token)
+    # Dono mein se koi bhi header mil jaye (X-Admin-Token ya manovichar-admin-token)
+    token = admin_token or alt_token
+    expected_token = os.getenv("MANOVICHAR_ADMIN_TOKEN", "Manovichar2026")
+    
+    if token is None or not secrets.compare_digest(token, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing admin token",
+        )
 
 
 @asynccontextmanager
