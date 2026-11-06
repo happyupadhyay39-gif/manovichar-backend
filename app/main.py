@@ -1,19 +1,22 @@
+
 import ipaddress
 import os
 import secrets
-import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+import psycopg
+from psycopg.rows import dict_row
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 
-DATABASE_PATH = Path(os.getenv("MANOVICHAR_DATABASE_PATH", "manovichar.db"))
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,"
@@ -46,15 +49,19 @@ class BlogResponse(BaseModel):
     published: bool
 
 
-def connect_db() -> sqlite3.Connection:
-    if str(DATABASE_PATH) != ":memory:":
-        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(DATABASE_PATH), timeout=10)
-    connection.row_factory = sqlite3.Row
-    return connection
+
+def connect_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is missing")
+
+    return psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        connect_timeout=15
+    )
 
 
-def initialize_database() -> None:
+def initialize_database():
     with connect_db() as connection:
         connection.execute(
             """
@@ -64,11 +71,13 @@ def initialize_database() -> None:
                 content TEXT NOT NULL,
                 author TEXT NOT NULL,
                 image_url TEXT,
-                created_at TEXT NOT NULL,
-                published INTEGER NOT NULL DEFAULT 1
+                created_at TIMESTAMPTZ NOT NULL,
+                published BOOLEAN NOT NULL DEFAULT TRUE
             )
             """
         )
+
+   
 
 
 def require_admin(request: Request) -> None:
@@ -131,21 +140,26 @@ app.add_middleware(
 def get_blogs() -> list[dict]:
     with connect_db() as connection:
         rows = connection.execute(
-            "SELECT * FROM blogs WHERE published = 1 ORDER BY created_at DESC"
+            "SELECT * FROM blogs WHERE published = TRUE ORDER BY created_at DESC"
         ).fetchall()
-    return [dict(row) for row in rows]
+    return rows
 
 
 @app.get("/api/blogs/{blog_id}", response_model=BlogResponse)
 def get_blog(blog_id: str) -> dict:
     with connect_db() as connection:
         row = connection.execute(
-            "SELECT * FROM blogs WHERE id = ? AND published = 1",
+            "SELECT * FROM blogs WHERE id = %s AND published = TRUE",
             (blog_id,),
         ).fetchone()
+
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blog not found")
-    return dict(row)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blog not found"
+        )
+
+    return row
 
 @app.post(
     "/api/admin/blogs",
@@ -153,15 +167,16 @@ def get_blog(blog_id: str) -> dict:
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_admin_for_local_testing)],
 )
-
 def create_blog(blog: BlogCreate) -> dict:
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(timezone.utc)
     blog_id = str(uuid4())
+
     with connect_db() as connection:
         connection.execute(
             """
-            INSERT INTO blogs (id, title, content, author, image_url, created_at, published)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO blogs
+            (id, title, content, author, image_url, created_at, published)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 blog_id,
@@ -170,15 +185,15 @@ def create_blog(blog: BlogCreate) -> dict:
                 blog.author,
                 blog.image_url,
                 created_at,
-                int(blog.published),
+                blog.published,
             ),
         )
+
     return {
         "id": blog_id,
         **blog.model_dump(),
         "created_at": created_at,
     }
-
 
 @app.delete(
     "/api/admin/blogs/{blog_id}",
@@ -187,7 +202,15 @@ def create_blog(blog: BlogCreate) -> dict:
 )
 def delete_blog(blog_id: str) -> Response:
     with connect_db() as connection:
-        cursor = connection.execute("DELETE FROM blogs WHERE id = ?", (blog_id,))
+        cursor = connection.execute(
+            "DELETE FROM blogs WHERE id = %s",
+            (blog_id,),
+        )
+
     if cursor.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blog not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blog not found"
+        )
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
